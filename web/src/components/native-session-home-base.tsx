@@ -840,12 +840,15 @@ export function NativeSessionHome({
     return sessions.length ? [{ ...group, sessions }] : []
   }), [agentFilter, filter, groups, machineFilter, modelFilter, projectFilter, projectionForItem, query])
 
+  // OSM-CONS-155: machines in error/offline render regardless of the status filter so a
+  // down gateway stays visible under the Active-first default (acceptance: gateway-down).
   const machineGroups = useMemo(() => sources
     .filter(({ machine }) => !machineFilter || machine.id === machineFilter)
     .flatMap(({ machine, snapshot, state, error }) => {
       const projects = filteredGroups.filter((group) => group.machine.id === machine.id)
+      const inError = state === "offline" || Boolean(error)
       const filtering = Boolean(query.trim() || agentFilter || projectFilter || modelFilter || filter !== "all")
-      if (!projects.length && filtering) return []
+      if (!projects.length && filtering && !inError) return []
       return [{
         machine,
         label: snapshot?.machine.name || machine.name,
