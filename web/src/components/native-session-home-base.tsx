@@ -8,9 +8,11 @@ import {
   type NativeSessionSurfaceTarget
 } from "../native-session-discovery"
 import {
+  isRecentlyActive,
   matchesFederatedSessionQuery,
   projectFederatedSession,
-  type FederatedSessionBucket
+  type FederatedSessionBucket,
+  type FederatedSessionProjection
 } from "../native-session-federation"
 import {
   federatedMoreStatesLabel,
@@ -112,6 +114,28 @@ type Props = {
 const SESSION_HOME_REFRESH_MS = 30_000
 const COLLAPSED_PROJECT_SESSION_COUNT = 5
 type SessionFilter = "all" | FederatedSessionBucket
+// Fork notice (Apache-2.0 §4(b)): filter default + persistence modified in
+// bennykoay/harness-remote for OSM-CONS-155 (Active-first). Upstream: giuliastro/harness-remote.
+const SESSION_FILTER_STORAGE_KEY = "opencode.remote.session-filter"
+
+const SESSION_FILTER_VALUES: Record<string, true> = { all: true, active: true, attention: true, failed: true, completed: true, recent: true }
+function readStoredSessionFilter(): SessionFilter {
+  try {
+    const raw = localStorage.getItem(SESSION_FILTER_STORAGE_KEY)
+    if (raw && SESSION_FILTER_VALUES[raw]) return raw as SessionFilter
+  } catch {
+    // Private-mode storage still gets the Active-first default for this session.
+  }
+  return "active"
+}
+
+function persistSessionFilter(value: SessionFilter): void {
+  try {
+    localStorage.setItem(SESSION_FILTER_STORAGE_KEY, value)
+  } catch {
+    // Keep the in-memory choice when storage is unavailable.
+  }
+}
 
 const HARNESS_ICON_FILES: Record<string, string> = {
   codex: "codex.svg",
@@ -433,7 +457,11 @@ export function NativeSessionHome({
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [olderSessionError, setOlderSessionError] = useState<string | null>(null)
   const [query, setQuery] = useState("")
-  const [filter, setFilter] = useState<SessionFilter>("all")
+  const [filter, setFilterState] = useState<SessionFilter>(readStoredSessionFilter)
+  const setFilter = useCallback((value: SessionFilter) => {
+    persistSessionFilter(value)
+    setFilterState(value)
+  }, [])
   const [machineFilter, setMachineFilter] = useState("")
   const [agentFilter, setAgentFilter] = useState("")
   const [projectFilter, setProjectFilter] = useState("")
@@ -622,15 +650,24 @@ export function NativeSessionHome({
     return sessionPresentation(item.record, t)
   }, [liveStateForItem, t])
 
-  const projectionForItem = useCallback((item: RecordWithMachine) => projectFederatedSession({
-    machineID: item.machineID,
-    machineName: item.machine.name,
-    agentID: item.record.agentId,
-    agentLabel: item.record.agentLabel,
-    session: item.record.session,
-    projectName: item.project?.name,
-    projectPath: item.project?.path
-  }, liveStateForItem(item)), [liveStateForItem])
+  // OSM-CONS-155: promote ONLY the `recent` fallthrough to `active` when the session was
+  // touched within RECENTLY_ACTIVE_WINDOW_MS. failed/attention/completed buckets pass
+  // through untouched — recency never overrides a stronger operational meaning.
+  const projectionForItem = useCallback((item: RecordWithMachine): FederatedSessionProjection => {
+    const projection = projectFederatedSession({
+      machineID: item.machineID,
+      machineName: item.machine.name,
+      agentID: item.record.agentId,
+      agentLabel: item.record.agentLabel,
+      session: item.record.session,
+      projectName: item.project?.name,
+      projectPath: item.project?.path
+    }, liveStateForItem(item))
+    if (projection.bucket !== "recent") return projection
+    const updated = item.record.session.time?.updated || item.record.session.time?.created || 0
+    if (isRecentlyActive(updated, Date.now())) return { ...projection, bucket: "active" }
+    return projection
+  }, [liveStateForItem])
 
   const groups = useMemo(() => projectGroups(records), [records])
 

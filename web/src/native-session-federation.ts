@@ -1,3 +1,6 @@
+// Fork notice (Apache-2.0 §4(b)): modified in bennykoay/harness-remote for OSM-CONS-155
+// (Active-first default + recency predicate). Upstream: giuliastro/harness-remote.
+
 import type { ModelSelection, Session, SessionStatus } from "./types"
 
 export type FederatedSessionBucket = "active" | "attention" | "failed" | "completed" | "recent"
@@ -98,6 +101,23 @@ export function federatedSessionBucket(
   if (COMPLETED_STATUS.has(type)) return "completed"
   if (ACTIVE_STATUS.has(type)) return "active"
   return "recent"
+}
+
+/**
+ * Recency predicate for the Active-first default (OSM-CONS-155). Pure: injected `nowMs`,
+ * no Date.now inside. Units are milliseconds — `Session.time.updated` flows straight into
+ * `new Date(timestamp)` / `Date.now() - timestamp` in native-session-home-base.tsx with no
+ * seconds conversion anywhere in repo/bridge. Applies ONLY when `federatedSessionBucket`
+ * fallthrough returned `recent`; never overrides failed/attention/completed. Boundary: a
+ * session updated exactly RECENTLY_ACTIVE_WINDOW_MS ago counts as recently active; future
+ * timestamps (clock skew) count as recently active rather than hiding live work.
+ */
+export const RECENTLY_ACTIVE_WINDOW_MS = 86_400_000
+
+export function isRecentlyActive(lastActivityMs: number, nowMs: number): boolean {
+  if (!Number.isFinite(lastActivityMs) || !Number.isFinite(nowMs)) return false
+  if (lastActivityMs <= 0 || nowMs <= 0) return false
+  return nowMs - lastActivityMs <= RECENTLY_ACTIVE_WINDOW_MS
 }
 
 export function federatedProjectIdentity({
